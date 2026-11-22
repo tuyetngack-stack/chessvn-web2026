@@ -1,0 +1,385 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CHESSVN</title>
+
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: #302e2b;
+    color: white;
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+
+h1 {
+    color: #81b64c;
+    margin: 20px 0 5px;
+}
+
+#status {
+    margin: 12px;
+    font-size: 17px;
+}
+
+.board {
+    width: min(94vw, 480px);
+    aspect-ratio: 1;
+    margin: 15px auto;
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+}
+
+.square {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.light { background: #eeeed2; }
+.dark { background: #769656; }
+
+.square img {
+    width: 94%;
+    height: 94%;
+    object-fit: contain;
+    pointer-events: none;
+}
+
+.selected {
+    box-shadow: inset 0 0 0 4px #f5d442;
+}
+
+.target::after {
+    content: "";
+    position: absolute;
+    width: 25%;
+    height: 25%;
+    border-radius: 50%;
+    background: #356b35;
+    opacity: .7;
+}
+
+button {
+    padding: 11px 20px;
+    margin: 8px;
+    border: none;
+    border-radius: 7px;
+    background: #81b64c;
+    color: white;
+    font-weight: bold;
+    font-size: 15px;
+}
+</style>
+</head>
+
+<body>
+
+<h1>♟ CHESSVN</h1>
+<div id="status">Lượt Trắng</div>
+
+<div class="board" id="board"></div>
+
+<button onclick="restart()">Chơi lại</button>
+
+<script>
+const board = document.getElementById("board");
+const statusText = document.getElementById("status");
+
+let pieces = [];
+let turn = "w";
+let selected = null;
+let enPassant = null;
+let lastMove = null;
+let legalTargets = [];
+
+function initialPosition() {
+    pieces = [
+        "br","bn","bb","bq","bk","bb","bn","br",
+        "bp","bp","bp","bp","bp","bp","bp","bp",
+        "","","","","","","","",
+        "","","","","","","","",
+        "","","","","","","","",
+        "","","","","","","","",
+        "wp","wp","wp","wp","wp","wp","wp","wp",
+        "wr","wn","wb","wq","wk","wb","wn","wr"
+    ];
+
+    turn = "w";
+    selected = null;
+    enPassant = null;
+    lastMove = null;
+    legalTargets = [];
+
+    render();
+}
+
+function imageURL(piece) {
+    return "https://assets-themes.chess.com/image/ejgfv/150/" + piece + ".png";
+}
+
+function pawnMoves(pos) {
+    const row = Math.floor(pos / 8);
+    const col = pos % 8;
+    const piece = pieces[pos];
+
+    if (!piece || piece[1] !== "p") return [];
+
+    const color = piece[0];
+    const direction = color === "w" ? -1 : 1;
+    const startRow = color === "w" ? 6 : 1;
+    const moves = [];
+
+    const nextRow = row + direction;
+
+    if (nextRow < 0 || nextRow > 7) return moves;
+
+    const forward = nextRow * 8 + col;
+
+    // Đi thẳng 1 ô
+    if (pieces[forward] === "") {
+        moves.push(forward);
+
+        // Đi 2 ô ở nước đầu tiên
+        if (row === startRow) {
+            const twoRow = row + direction * 2;
+            const twoStep = twoRow * 8 + col;
+
+            if (pieces[twoStep] === "") {
+                moves.push(twoStep);
+            }
+        }
+    }
+
+    // Ăn chéo
+    for (const dc of [-1, 1]) {
+        const newCol = col + dc;
+
+        if (newCol < 0 || newCol > 7) continue;
+
+        const target = nextRow * 8 + newCol;
+
+        if (
+            pieces[target] !== "" &&
+            pieces[target][0] !== color &&
+            pieces[target][1] !== "k"
+        ) {
+            moves.push(target);
+        }
+
+        // Bắt tốt qua đường
+        if (
+            enPassant === target &&
+            pieces[target] === "" &&
+            pieces[target + 8 * (color === "w" ? 1 : -1)] ===
+                (color === "w" ? "bp" : "wp")
+        ) {
+            moves.push(target);
+        }
+    }
+
+    return moves;
+}
+
+function movePawn(from, to) {
+    const piece = pieces[from];
+    const color = piece[0];
+    const oldRow = Math.floor(from / 8);
+    const newRow = Math.floor(to / 8);
+    const oldCol = from % 8;
+    const newCol = to % 8;
+
+    // Bắt tốt qua đường
+    if (
+        oldCol !== newCol &&
+        pieces[to] === ""
+    ) {
+        const captured = to + (color === "w" ? 8 : -8);
+        pieces[captured] = "";
+    }
+
+    pieces[to] = piece;
+    pieces[from] = "";
+
+    // Xác định ô bắt tốt qua đường
+    enPassant = null;
+
+    if (Math.abs(newRow - oldRow) === 2) {
+        enPassant = (from + to) / 2;
+    }
+
+    lastMove = { from, to };
+
+    // Phong cấp
+    if (
+        (color === "w" && newRow === 0) ||
+        (color === "b" && newRow === 7)
+    ) {
+        let choice = prompt(
+            "Phong cấp: nhập q (Hậu), r (Xe), b (Tượng), n (Mã)",
+            "q"
+        );
+
+        choice = (choice || "q").toLowerCase();
+
+        if (!["q", "r", "b", "n"].includes(choice)) {
+            choice = "q";
+        }
+
+        pieces[to] = color + choice;
+    }
+    turn = color === "w" ? "b" : "w";
+    selected = null;
+    legalTargets = [];
+
+    render();
+}
+function pieceMoves(pos) {
+    const piece = pieces[pos];
+    if (!piece || piece[1] === "p") return [];
+
+    const color = piece[0];
+    const type = piece[1];
+    const row = Math.floor(pos / 8);
+    const col = pos % 8;
+    const moves = [];
+
+    const directions = {
+        r: [[1,0],[-1,0],[0,1],[0,-1]],
+        b: [[1,1],[1,-1],[-1,1],[-1,-1]],
+        q: [[1,0],[-1,0],[0,1],[0,-1],
+            [1,1],[1,-1],[-1,1],[-1,-1]],
+        k: [[1,0],[-1,0],[0,1],[0,-1],
+            [1,1],[1,-1],[-1,1],[-1,-1]],
+        n: [[2,1],[2,-1],[-2,1],[-2,-1],
+            [1,2],[1,-2],[-1,2],[-1,-2]]
+    };
+
+    const sliding = ["r", "b", "q"].includes(type);
+
+    for (const [dr, dc] of directions[type]) {
+        let r = row + dr;
+        let c = col + dc;
+
+        while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+            const target = r * 8 + c;
+
+            if (pieces[target] === "") {
+                moves.push(target);
+            } else {
+                if (pieces[target][0] !== color &&
+                    pieces[target][1] !== "k") {
+                    moves.push(target);
+                }
+                break;
+            }
+
+            if (!sliding) break;
+
+            r += dr;
+            c += dc;
+        }
+    }
+
+    return moves;
+}
+
+function clickSquare(i) {
+    if (selected === null) {
+        if (pieces[i] !== "" && pieces[i][0] === turn) {
+            selected = i;
+            legalTargets = pieces[i][1] === "p"
+                ? pawnMoves(i)
+                : pieceMoves(i);
+        }
+    } else {
+        if (legalTargets.includes(i)) {
+            if (pieces[selected][1] === "p") {
+                movePawn(selected, i);
+            } else {
+                pieces[i] = pieces[selected];
+                pieces[selected] = "";
+                turn = turn === "w" ? "b" : "w";
+                selected = null;
+                legalTargets = [];
+                render();
+            }
+            return;
+        }
+
+        if (pieces[i] !== "" && pieces[i][0] === turn) {
+            selected = i;
+            legalTargets = pieces[i][1] === "p"
+                ? pawnMoves(i)
+                : pieceMoves(i);
+        } else {
+            selected = null;
+            legalTargets = [];
+        }
+    }
+
+    render();
+}
+function render() {
+    board.innerHTML = "";
+
+    for (let i = 0; i < 64; i++) {
+        const square = document.createElement("div");
+
+        square.className = "square";
+
+        const row = Math.floor(i / 8);
+        const col = i % 8;
+
+        square.classList.add(
+            (row + col) % 2 === 0 ? "light" : "dark"
+        );
+
+        if (selected === i) {
+            square.classList.add("selected");
+        }
+
+        if (legalTargets.includes(i)) {
+            square.classList.add("target");
+        }
+
+        if (pieces[i] !== "") {
+            const img = document.createElement("img");
+            img.src = imageURL(pieces[i]);
+            img.alt = pieces[i];
+
+            img.onerror = function() {
+                this.style.display = "none";
+                square.textContent = pieces[i];
+            };
+
+            square.appendChild(img);
+        }
+
+        square.addEventListener("click", () => clickSquare(i));
+
+        board.appendChild(square);
+    }
+
+    statusText.textContent =
+        turn === "w" ? "Lượt Trắng" : "Lượt Đen";
+}
+
+function restart() {
+    initialPosition();
+}
+
+initialPosition();
+</script>
+
+</body>
+</html>
